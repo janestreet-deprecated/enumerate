@@ -1,0 +1,4 @@
+# OASIS_START
+# OASIS_STOP
+<syntax/*.ml{,i}>: syntax_camlp4o, locfix
+<sample/test.ml>: syntax_camlp4o, pa_enumerate

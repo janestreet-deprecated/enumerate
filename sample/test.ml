@@ -23,7 +23,10 @@ type xx = [ `A of s * s ] with enumerate
 TEST = all_of_xx = [`A (C, C); `A (D, C); `A (C, D); `A (D, D)]
 
 type variant_inclusion = [ x | `C | x ] with enumerate
-TEST = all_of_variant_inclusion = all_of_x @ [ `C ] @ all_of_x
+TEST = all_of_variant_inclusion =
+       (all_of_x :> variant_inclusion list)
+       @ [ `C ]
+       @ (all_of_x :> variant_inclusion list)
 
 type y = J of t * s with enumerate
 TEST = all_of_y = [J (A,C); J (B,C); J (A,D); J (B,D)]
@@ -96,6 +99,22 @@ TEST = !number_of_computations = 4
 type 'a phantom_variable = unit with enumerate
 type empty
 TEST = all_of_phantom_variable ([] : empty list) = [()]
+
+(* check that the coercions happen correctly when nested *)
+type q = [x | `C] option option with enumerate
+TEST = all_of_q = [None; Some None; Some (Some `A); Some (Some (`B A));
+                   Some (Some (`B B)); Some (Some `C)]
+
+type 'tt tt = [`G of 'tt | x] with enumerate
+TEST = all_of_tt [()] = [`G (); `A; `B A; `B B]
+
+(* Tricky case where the scoping of type variable prevents generalization. If the
+   constraints looked like (... :> [ a tt | `F ]) (instead of the same thing with s/a/'a/)
+   where there is a fun (type a) somewhere in scope it would work, but it is simpler to
+   remove variables than replace them by local types consistently. *)
+type 'a nested_include_with_variable = [ 'a tt | `F ] option with enumerate
+
+type +'a variance = 'a with enumerate
 
 module Check_sigs = struct
   module type S1 = sig

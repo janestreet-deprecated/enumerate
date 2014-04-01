@@ -58,19 +58,20 @@ let name_of_type_variable str =
   "_" ^ name_of_type_name str
 
 (* Utility functions *)
+let enumeration_type_of_td ~loc ~type_name ~tps =
+  let tps = List.map tps ~f:Gen.drop_variance_annotations in
+  let init =
+    let tp = List.fold_left tps ~init:(TyId (loc, (IdLid (loc, type_name))))
+               ~f:(fun acc tp -> TyApp (loc,acc,tp))
+    in
+    <:ctyp< list $tp$ >>
+  in
+  List.fold_right tps ~init
+    ~f:(fun tp acc -> <:ctyp< list $tp$ -> $acc$ >>)
+
 let rec sig_of_td = function
   | TyDcl (loc, type_name, tps, _rhs, _cl) ->
-    let tps = List.map tps ~f:Gen.drop_variance_annotations in
-    let enumeration_type =
-      let init =
-        let tp = List.fold_left tps ~init:(TyId (loc, (IdLid (loc, type_name))))
-          ~f:(fun acc tp -> TyApp (loc,acc,tp))
-        in
-        <:ctyp< list $tp$ >>
-      in
-      List.fold_right tps ~init
-        ~f:(fun tp acc -> <:ctyp< list $tp$ -> $acc$ >>)
-    in
+    let enumeration_type = enumeration_type_of_td ~loc ~type_name ~tps in
     let name = name_of_type_name type_name in
     <:sig_item< value $lid: name$ : $enumeration_type$>>
   | TyAnd (loc, tp1, tp2) ->
@@ -88,6 +89,11 @@ let patt_tuple loc pats =
   assert (List.length pats >= 2);
   PaTup (loc, paCom_of_list pats)
 let apply e el = Gen.exApp_of_list (e :: el)
+
+let replace_variables_by_underscores =
+  (Ast.map_ctyp (function
+    | <:ctyp@loc< '$_$ >> -> <:ctyp@loc< _ >>
+    | ctyp -> ctyp))#ctyp
 
 let list_map loc l ~f =
   let element = gensym () in
@@ -179,16 +185,19 @@ let rec list_append loc l1 l2 =
     | <:expr< List.append $ll$ $lr$ >> -> list_append loc ll (list_append loc lr l2)
     | _ -> <:expr@loc< List.append $l1$ $l2$ >>
 
-let rec enum = function
+let rec enum ~main_type = function
   | <:ctyp@loc< bool >> -> <:expr< [False; True] >>
   | <:ctyp@loc< unit >> -> <:expr< [()] >>
   | <:ctyp@loc< option $tp$ >> ->
-    <:expr< [None :: $list_map loc (enum tp) ~f:(fun e -> <:expr<Some $e$>>)$] >>
+    <:expr< [None :: $list_map loc (enum ~main_type:tp tp)
+            ~f:(fun e -> <:expr<Some $e$>>)$] >>
   | <:ctyp@loc< $lid:id$ >> ->
     let all = enum_val_of_id loc <:ident<$lid:id$>> in
     <:expr<$id:all$>>
   | <:ctyp@loc< $tp1$ | $tp2$ >> ->
-    list_append loc (enum tp1) (enum tp2)
+    let enum1 = variant_case loc tp1 ~main_type in
+    let enum2 = variant_case loc tp2 ~main_type in
+    list_append loc enum1 enum2
   | <:ctyp@loc< $uid:cnstr$ >> ->
     <:expr< [ $uid:cnstr$ ] >>
   | <:ctyp@loc< `$cnstr$ >> ->
@@ -198,7 +207,7 @@ let rec enum = function
       List.fold_left x ~init:<:expr<$uid:cnstr$>>
         ~f:(fun acc x -> <:expr<$acc$ $x$>>))
   | <:ctyp@loc< `$uid:cnstr$ of $tp$ >> ->
-    list_map loc (enum tp) ~f:(fun e -> <:expr< `$uid:cnstr$ $e$ >>)
+    list_map loc (enum tp ~main_type:tp) ~f:(fun e -> <:expr< `$uid:cnstr$ $e$ >>)
   | TyTup (loc,tps) ->
     product loc tps (fun exprs -> tuple loc exprs)
   | TyRec (loc,fields) ->
@@ -222,20 +231,46 @@ let rec enum = function
     let all = enum_val_of_id loc id in
     <:expr< $id:all$ >>
   | <:ctyp@loc< '$lid:id$ >> -> <:expr<$lid:name_of_type_variable id$>>
-  | (<:ctyp< [ $alts$ ] >> | <:ctyp< [= $alts$ ]>>) -> enum alts
-  | <:ctyp@loc< $t1$ $t2$ >> -> <:expr< $enum t1$ $enum t2$ >>
+  | (<:ctyp< [ $alts$ ] >> | <:ctyp< [= $alts$ ]>>) -> enum alts ~main_type
+  | <:ctyp@loc< $t1$ $t2$ >> -> <:expr< $enum t1 ~main_type:t1$ $enum t2 ~main_type:t2$ >>
   | ctyp -> Loc.raise (loc_of_ctyp ctyp) (Failure "unsupported type")
 
+and variant_case loc tp ~main_type =
+  let result = enum tp ~main_type in
+  match tp with
+  | <:ctyp< [ $_$ ] >> | <:ctyp< [= $_$ ]>>
+  | <:ctyp< $_$ | $_$ >>
+  | <:ctyp< `$_$ >> | <:ctyp< `$_$ of $_$ >>
+  | <:ctyp< $uid:_$ >> | <:ctyp< $uid:_$ of $_$ >> | <:ctyp< $uid:_$ : $_$ >>
+    -> result
+  | _ -> <:expr< ($result$ :> list $replace_variables_by_underscores main_type$) >>
+
 and product loc tps f =
-    let all = List.map (list_of_ctyp tps []) ~f:enum in
+    let all = List.map (list_of_ctyp tps []) ~f:(fun tp -> enum ~main_type:tp tp) in
     cartesian_product_map all loc ~f
+
+let quantify loc vars typ =
+  match vars with
+  | [] -> typ
+  | first :: rest ->
+    let quantifier =
+      List.fold_left rest ~init:<:ctyp< $first$ >>
+        ~f:(fun acc typ -> <:ctyp@loc< $acc$ $typ$ >>)
+    in
+    <:ctyp< ! $quantifier$. $typ$ >>
 
 let enum_of_td = function
   | TyDcl (loc, type_name, tps, rhs, _cl) ->
+    let tps = List.map tps ~f:Gen.drop_variance_annotations in
     let all =
+      let main_type =
+        List.fold_left tps ~init:<:ctyp@loc< $lid:type_name$ >>
+          ~f:(fun acc _ -> <:ctyp@loc< $acc$ _ >>)
+      in
       match rhs with
-      | <:ctyp< $_$ == $tp$ >> -> enum tp
-      | tp -> enum tp
+      | <:ctyp< $_$ == $tp$ >> -> enum tp ~main_type
+      | tp ->
+        enum tp ~main_type
     in
     let name = name_of_type_name type_name in
     let args = List.map tps ~f:(fun tp ->
@@ -244,7 +279,12 @@ let enum_of_td = function
       <:patt<$lid:name$>>
     )
     in
-    <:str_item< value $lid:name$ = $Gen.abstract loc args all$; >>
+    let enumeration_type =
+      let typ = enumeration_type_of_td ~loc ~type_name ~tps in
+      quantify loc tps typ
+    in
+    let body = Gen.abstract loc args all in
+    <:str_item@loc< value $lid:name$ : $enumeration_type$ = $body$; >>
   | _ -> fail ()
 
 let () = add_generator "enumerate" (fun _rec td -> enum_of_td td)
@@ -254,5 +294,5 @@ let () = Syntax.Quotation.add "all"
            (fun loc _loc_name_opt cnt_str ->
               Pa_type_conv.set_conv_path_if_not_set loc;
               let ctyp = Gram.parse_string Syntax.ctyp_quot loc cnt_str in
-              enum ctyp
+              enum ctyp ~main_type:ctyp
            )

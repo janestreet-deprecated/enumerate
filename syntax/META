@@ -1,0 +1,16 @@
+# OASIS_START
+# DO NOT EDIT (digest: d01621b8af0e220e56afcecbfe40024e)
+package "syntax" (
+ version = "111.08.00"
+ description = "Quotation expanders for enumerating finite types"
+ requires = "camlp4 type_conv"
+ archive(syntax, preprocessor) = "enumerate.cma"
+ archive(syntax, toploop) = "enumerate.cma"
+ archive(syntax, byte) = "enumerate.cma"
+ archive(syntax, byte, plugin) = "enumerate.cma"
+ archive(syntax, native) = "enumerate.cmxa"
+ archive(syntax, native, plugin) = "enumerate.cmxs"
+ exists_if = "enumerate.cma"
+)
+# OASIS_STOP
+

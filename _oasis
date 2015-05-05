@@ -16,7 +16,7 @@ XStdFilesREADME:  false
 BuildTools:       ocamlbuild, camlp4o
 
 Library enumerate
-  Path:               syntax
+  Path:               src
   FindlibContainers:  enumerate
   FindlibName:        syntax
   Modules:            Pa_enumerate

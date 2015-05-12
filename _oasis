@@ -5,7 +5,7 @@ Name:             enumerate
 Version:          111.08.00
 Synopsis:         Quotation expanders for enumerating finite types
 Authors:          Jane Street Group, LLC <opensource@janestreet.com>
-Copyrights:       (C) 2009-2014 Jane Street Group, LLC <opensource@janestreet.com>
+Copyrights:       (C) 2009-2014 Jane Street Group LLC <opensource@janestreet.com>
 Maintainers:      Jane Street Group, LLC <opensource@janestreet.com>
 License:          Apache-2.0
 LicenseFile:      LICENSE.txt
